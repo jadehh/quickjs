@@ -22,10 +22,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-
-if (typeof require !== 'undefined') {
-    var fs = require('fs');
-}
+import * as std from "std";
 
 function pad(str, n) {
     str += "";
@@ -63,16 +60,20 @@ function toPrec(n, prec) {
         s = s.substring(0, i) + "." + s.substring(i);
     return s;
 }
-
+                
 var ref_data;
 var log_data;
 
-var heads  = [ "TEST", "N", "TIME (ns)", "REF (ns)", "SCORE (1000)" ];
+var heads  = [ "TEST", "N", "TIME (ns)", "REF (ns)", "SCORE (%)" ];
 var widths = [    22,   10,          9,     9,       9 ];
-var precs  = [     0,   0,           2,     2,       0 ];
+var precs  = [     0,   0,           2,     2,       2 ];
 var total  = [     0,   0,           0,     0,       0 ];
 var total_score = 0;
 var total_scale = 0;
+
+if (typeof console == "undefined") {
+    var console = { log: print };
+}
 
 function log_line() {
     var i, n, s, a;
@@ -81,7 +82,7 @@ function log_line() {
         if (i > 0)
             s += " ";
         a = arguments[i];
-        if (typeof a === "number") {
+        if (typeof a == "number") {
             total[i] += a;
             a = toPrec(a, precs[i]);
             s += pad_left(a, widths[i]);
@@ -92,28 +93,20 @@ function log_line() {
     console.log(s);
 }
 
-var clocks_per_sec = 1000;
+var clocks_per_sec = 1000000;
 var max_iterations = 100;
-var clock_threshold = 2;  /* favoring short measuring spans */
+var clock_threshold = 2000;  /* favoring short measuring spans */
 var min_n_argument = 1;
 var get_clock;
-if (typeof performance !== "undefined") {
-    // use more precise clock on NodeJS
-    // need a method call on performance object
-    get_clock = () => performance.now();
-} else
-if (typeof os !== "undefined") {
-    // use more precise clock on QuickJS
-    get_clock = os.now;
+
+if (typeof globalThis.__date_clock != "function") {
+    console.log("using fallback millisecond clock");
+    clocks_per_sec = 1000;
+    max_iterations = 10;
+    clock_threshold = 100;
+    get_clock = Date.now;
 } else {
-    // use Date.now and round up to the next millisecond
-    get_clock = () => {
-        var t0 = Date.now();
-        var t;
-        while ((t = Date.now()) == t0)
-            continue;
-        return t;
-    }
+    get_clock = globalThis.__date_clock;
 }
 
 function log_one(text, n, ti) {
@@ -127,7 +120,7 @@ function log_one(text, n, ti) {
     ti = Math.round(ti * 100) / 100;
     log_data[text] = ti;
     if (typeof ref === "number") {
-        log_line(text, n, ti, ref, Math.round(ref * 1000 / ti));
+        log_line(text, n, ti, ref, ti * 100 / ref);
         total_score += ti * 100 / ref;
         total_scale += 100;
     } else {
@@ -139,27 +132,28 @@ function log_one(text, n, ti) {
 
 function bench(f, text)
 {
-    var i, j, n, t, ti, nb_its, ref, ti_n, ti_n1;
+    var i, j, n, t, t1, ti, nb_its, ref, ti_n, ti_n1, min_ti;
 
     nb_its = n = 1;
     if (f.bench) {
         ti_n = f(text);
     } else {
-        // measure ti_n: the shortest time for an individual operation
         ti_n = 1000000000;
+        min_ti = clock_threshold / 10;
         for(i = 0; i < 30; i++) {
-            // measure ti: the shortest time for max_iterations iterations
             ti = 1000000000;
             for (j = 0; j < max_iterations; j++) {
                 t = get_clock();
+                while ((t1 = get_clock()) == t)
+                    continue;
                 nb_its = f(n);
-                t = get_clock() - t;
                 if (nb_its < 0)
                     return; // test failure
-                if (ti > t)
-                    ti = t;
+                t1 = get_clock() - t1;
+                if (ti > t1)
+                    ti = t1;
             }
-            if (ti >= clock_threshold / 10) {
+            if (ti >= min_ti) {
                 ti_n1 = ti / nb_its;
                 if (ti_n > ti_n1)
                     ti_n = ti_n1;
@@ -185,58 +179,12 @@ function empty_loop(n) {
     return n;
 }
 
-function empty_down_loop(n) {
-    var j;
-    for(j = n; j > 0; j--) {
-    }
-    return n;
-}
-
-function empty_down_loop2(n) {
-    var j;
-    for(j = n; j --> 0;) {
-    }
-    return n;
-}
-
-function empty_do_loop(n) {
-    var j = n;
-    do { } while (--j > 0);
-    return n;
-}
-
 function date_now(n) {
     var j;
     for(j = 0; j < n; j++) {
         Date.now();
     }
     return n;
-}
-
-function date_parse(n) {
-    var x0 = 0, dx = 0;
-    var j;
-    for(j = 0; j < n; j++) {
-        var x1 = x0 - x0 % 1000;
-        var x2 = -x0;
-        var x3 = -x1;
-        var d0 = new Date(x0);
-        var d1 = new Date(x1);
-        var d2 = new Date(x2);
-        var d3 = new Date(x3);
-        if (Date.parse(d0.toISOString()) != x0
-        ||  Date.parse(d1.toGMTString()) != x1
-        ||  Date.parse(d1.toString()) != x1
-        ||  Date.parse(d2.toISOString()) != x2
-        ||  Date.parse(d3.toGMTString()) != x3
-        ||  Date.parse(d3.toString()) != x3) {
-            console.log("Date.parse error for " + x0);
-            return -1;
-        }
-        dx = (dx * 1.1 + 1) >> 0;
-        x0 = (x0 + dx) % 8.64e15;
-    }
-    return n * 6;
 }
 
 function prop_read(n)
@@ -267,78 +215,30 @@ function prop_write(n)
     return n * 4;
 }
 
-function prop_update(n)
-{
-    var obj, j;
-    obj = {a: 1, b: 2, c:3, d:4 };
-    for(j = 0; j < n; j++) {
-        obj.a += j;
-        obj.b += j;
-        obj.c += j;
-        obj.d += j;
-    }
-    return n * 4;
-}
-
 function prop_create(n)
 {
-    var obj, i, j;
+    var obj, j;
     for(j = 0; j < n; j++) {
-        obj = {};
+        obj = new Object();
         obj.a = 1;
         obj.b = 2;
         obj.c = 3;
         obj.d = 4;
-        obj.e = 5;
-        obj.f = 6;
-        obj.g = 7;
-        obj.h = 8;
-        obj.i = 9;
-        obj.j = 10;
-        for(i = 0; i < 10; i++) {
-            obj[i] = i;
-        }
     }
-    return n * 20;
-}
-
-function prop_clone(n)
-{
-    var ref, obj, j, k;
-    ref = { a:1, b:2, c:3, d:4, e:5, f:6, g:7, h:8, i:9, j:10 };
-    for(k = 0; k < 10; k++) {
-        ref[k] = k;
-    }
-    for (j = 0; j < n; j++) {
-        global_res = { ...ref };
-    }
-    return n * 20;
+    return n * 4;
 }
 
 function prop_delete(n)
 {
-    var ref, obj, j, k;
-    ref = { a:1, b:2, c:3, d:4, e:5, f:6, g:7, h:8, i:9, j:10 };
-    for(k = 0; k < 10; k++) {
-        ref[k] = k;
+    var obj, j;
+    obj = {};
+    for(j = 0; j < n; j++) {
+        obj[j] = 1;
     }
-    for (j = 0; j < n; j++) {
-        obj = { ...ref };
-        delete obj.a;
-        delete obj.b;
-        delete obj.c;
-        delete obj.d;
-        delete obj.e;
-        delete obj.f;
-        delete obj.g;
-        delete obj.h;
-        delete obj.i;
-        delete obj.j;
-        for(k = 0; k < 10; k++) {
-            delete obj[k];
-        }
+    for(j = 0; j < n; j++) {
+        delete obj[j];
     }
-    return n * 20;
+    return n;
 }
 
 function array_read(n)
@@ -399,32 +299,15 @@ function array_prop_create(n)
     return len * n;
 }
 
-function array_slice(n)
-{
-    var ref, a, i, j, len;
-    len = 1000;
-    ref = [];
-    for(i = 0; i < len; i++)
-        ref[i] = i;
-    for(j = 0; j < n; j++) {
-        ref[0] = j;
-        a = ref.slice();
-        a[0] = 0;
-        global_res = a;
-    }
-    return len * n;
-}
-
 function array_length_decr(n)
 {
-    var tab, ref, i, j, len;
+    var tab, i, j, len;
     len = 1000;
-    ref = [];
+    tab = [];
     for(i = 0; i < len; i++)
-        ref[i] = i;
+        tab[i] = i;
     for(j = 0; j < n; j++) {
-        tab = ref.slice();
-        for(i = len; i --> 0;)
+        for(i = len - 1; i >= 0; i--)
             tab.length = i;
     }
     return len * n;
@@ -432,16 +315,15 @@ function array_length_decr(n)
 
 function array_hole_length_decr(n)
 {
-    var tab, ref, i, j, len;
+    var tab, i, j, len;
     len = 1000;
-    ref = [];
+    tab = [];
     for(i = 0; i < len; i++) {
-        if (i % 10 == 9)
-            ref[i] = i;
+        if (i != 3)
+            tab[i] = i;
     }
     for(j = 0; j < n; j++) {
-        tab = ref.slice();
-        for(i = len; i --> 0;)
+        for(i = len - 1; i >= 0; i--)
             tab.length = i;
     }
     return len * n;
@@ -461,13 +343,12 @@ function array_push(n)
 
 function array_pop(n)
 {
-    var tab, ref, i, j, len, sum;
+    var tab, i, j, len, sum;
     len = 500;
-    ref = [];
-    for(i = 0; i < len; i++)
-        ref[i] = i;
     for(j = 0; j < n; j++) {
-        tab = ref.slice();
+        tab = [];
+        for(i = 0; i < len; i++)
+            tab[i] = i;
         sum = 0;
         for(i = 0; i < len; i++)
             sum += tab.pop();
@@ -539,7 +420,6 @@ function global_read(n)
     return n * 4;
 }
 
-// non strict version
 var global_write =
     (1, eval)(`(function global_write(n)
            {
@@ -582,7 +462,6 @@ function local_destruct(n)
 var global_v1, global_v2, global_v3, global_v4;
 var global_a, global_b, global_c, global_d;
 
-// non strict version
 var global_destruct =
     (1, eval)(`(function global_destruct(n)
            {
@@ -610,25 +489,6 @@ function global_destruct_strict(n)
     return n * 8;
 }
 
-function g(a)
-{
-    return 1;
-}
-
-function global_func_call(n)
-{
-    var j, sum;
-    sum = 0;
-    for(j = 0; j < n; j++) {
-        sum += g(j);
-        sum += g(j);
-        sum += g(j);
-        sum += g(j);
-    }
-    global_res = sum;
-    return n * 4;
-}
-
 function func_call(n)
 {
     function f(a)
@@ -648,7 +508,7 @@ function func_call(n)
     return n * 4;
 }
 
-function func_closure_call(n)
+function closure_var(n)
 {
     function f(a)
     {
@@ -753,8 +613,8 @@ function bigint256_arith(n)
 function set_collection_add(n)
 {
     var s, i, j, len = 100;
+    s = new Set();
     for(j = 0; j < n; j++) {
-        s = new Set();
         for(i = 0; i < len; i++) {
             s.add(String(i), i);
         }
@@ -768,25 +628,25 @@ function set_collection_add(n)
 
 function array_for(n)
 {
-    var r, i, j, sum, len = 100;
+    var r, i, j, sum;
     r = [];
-    for(i = 0; i < len; i++)
+    for(i = 0; i < 100; i++)
         r[i] = i;
     for(j = 0; j < n; j++) {
         sum = 0;
-        for(i = 0; i < len; i++) {
+        for(i = 0; i < 100; i++) {
             sum += r[i];
         }
         global_res = sum;
     }
-    return n * len;
+    return n * 100;
 }
 
 function array_for_in(n)
 {
-    var r, i, j, sum, len = 100;
+    var r, i, j, sum;
     r = [];
-    for(i = 0; i < len; i++)
+    for(i = 0; i < 100; i++)
         r[i] = i;
     for(j = 0; j < n; j++) {
         sum = 0;
@@ -795,14 +655,14 @@ function array_for_in(n)
         }
         global_res = sum;
     }
-    return n * len;
+    return n * 100;
 }
 
 function array_for_of(n)
 {
-    var r, i, j, sum, len = 100;
+    var r, i, j, sum;
     r = [];
-    for(i = 0; i < len; i++)
+    for(i = 0; i < 100; i++)
         r[i] = i;
     for(j = 0; j < n; j++) {
         sum = 0;
@@ -811,7 +671,7 @@ function array_for_of(n)
         }
         global_res = sum;
     }
-    return n * len;
+    return n * 100;
 }
 
 function math_min(n)
@@ -826,108 +686,58 @@ function math_min(n)
     return n * 1000;
 }
 
-function regexp_ascii(n)
-{
-    var i, j, r, s;
-    s = "the quick brown fox jumped over the lazy dog"
-    for(j = 0; j < n; j++) {
-        for(i = 0; i < 1000; i++)
-            r = /the quick brown fox/.exec(s)
-        global_res = r;
-    }
-    return n * 1000;
-}
-
-function regexp_utf16(n)
-{
-    var i, j, r, s;
-    s = "the quick brown ᶠᵒˣ jumped over the lazy ᵈᵒᵍ"
-    for(j = 0; j < n; j++) {
-        for(i = 0; i < 1000; i++)
-            r = /the quick brown ᶠᵒˣ/.exec(s)
-        global_res = r;
-    }
-    return n * 1000;
-}
-
 /* incremental string contruction as local var */
 function string_build1(n)
 {
     var i, j, r;
+    r = "";
     for(j = 0; j < n; j++) {
-        r = "";
-        for(i = 0; i < 1000; i++)
+        for(i = 0; i < 100; i++)
             r += "x";
         global_res = r;
     }
-    return n * 1000;
-}
-
-/* incremental string contruction using + */
-function string_build1x(n)
-{
-    var i, j, r;
-    for(j = 0; j < n; j++) {
-        r = "";
-        for(i = 0; i < 1000; i++)
-            r = r + "x";
-        global_res = r;
-    }
-    return n * 1000;
-}
-
-/* incremental string contruction using +2c */
-function string_build2c(n)
-{
-    var i, j;
-    for(j = 0; j < n; j++) {
-        var r = "";
-        for(i = 0; i < 1000; i++)
-            r += "xy";
-        global_res = r;
-    }
-    return n * 1000;
+    return n * 100;
 }
 
 /* incremental string contruction as arg */
 function string_build2(n, r)
 {
     var i, j;
+    r = "";
     for(j = 0; j < n; j++) {
-        r = "";
-        for(i = 0; i < 1000; i++)
+        for(i = 0; i < 100; i++)
             r += "x";
         global_res = r;
     }
-    return n * 1000;
+    return n * 100;
 }
 
 /* incremental string contruction by prepending */
-function string_build3(n)
+function string_build3(n, r)
 {
-    var i, j, r;
+    var i, j;
+    r = "";
     for(j = 0; j < n; j++) {
-        r = "";
-        for(i = 0; i < 1000; i++)
+        for(i = 0; i < 100; i++)
             r = "x" + r;
         global_res = r;
     }
-    return n * 1000;
+    return n * 100;
 }
 
 /* incremental string contruction with multiple reference */
 function string_build4(n)
 {
     var i, j, r, s;
+    r = "";
     for(j = 0; j < n; j++) {
-        r = "";
-        for(i = 0; i < 1000; i++) {
+        for(i = 0; i < 100; i++) {
             s = r;
             r += "x";
         }
         global_res = r;
     }
-    return n * 1000;
+    return n * 100;
 }
 
 /* sort bench */
@@ -1060,33 +870,32 @@ function sort_bench(text) {
                         ": " + arr[i - 1] + " > " + arr[i]);
         }
         if (sort_bench.verbose)
-            log_one("sort_" + f.name, 1, ti / 100);
+            log_one("sort_" + f.name, n, ti, n * 100);
     }
     total_score = save_total_score;
     total_scale = save_total_scale;
-    return total / n / 100;
+    return total / n / 1000;
 }
 sort_bench.bench = true;
 sort_bench.verbose = false;
 
 function int_to_string(n)
 {
-    var s, j;
+    var s, r, j;
+    r = 0;
     for(j = 0; j < n; j++) {
-        s = (j % 1000).toString();
-        s = (1234000 + j % 1000).toString();
+        s = (j + 1).toString();
     }
-    global_res = s;
-    return n * 2;
+    return n;
 }
 
 function float_to_string(n)
 {
-    var s, j;
+    var s, r, j;
+    r = 0;
     for(j = 0; j < n; j++) {
         s = (j + 0.1).toString();
     }
-    global_res = s;
     return n;
 }
 
@@ -1095,6 +904,7 @@ function string_to_int(n)
     var s, r, j;
     r = 0;
     s = "12345";
+    r = 0;
     for(j = 0; j < n; j++) {
         r += (s | 0);
     }
@@ -1107,6 +917,7 @@ function string_to_float(n)
     var s, r, j;
     r = 0;
     s = "12345.6";
+    r = 0;
     for(j = 0; j < n; j++) {
         r -= s;
     }
@@ -1116,92 +927,41 @@ function string_to_float(n)
 
 function load_result(filename)
 {
-    var has_filename = filename;
-    var has_error = false;
-    var str, res;
-
-    if (!filename)
-        filename = "microbench.txt";
-
-    if (typeof fs !== "undefined") {
-        // read the file in Node.js
-        try {
-            str = fs.readFileSync(filename, { encoding: "utf8" });
-        } catch {
-            has_error = true;
-        }
-    } else
-    if (typeof std !== "undefined") {
-        // read the file in QuickJS
-        var f = std.open(filename, "r");
-        if (f) {
-            str = f.readAsString();
-            f.close();
-        } else {
-            has_error = true;
-        }
-    } else {
+    var f, str, res;
+    if (typeof std === "undefined")
         return null;
-    }
-    if (has_error) {
-        if (has_filename) {
-            // Should throw exception?
-            console.log("cannot load " + filename);
-        }
+    f = std.open(filename, "r");
+    if (!f)
         return null;
-    }
+    str = f.readAsString();
     res = JSON.parse(str);
+    f.close();
     return res;
 }
 
 function save_result(filename, obj)
 {
-    var str = JSON.stringify(obj, null, 2) + "\n";
-    var has_error = false;
-
-    if (typeof fs !== "undefined") {
-        // save the file in Node.js
-        try {
-            str = fs.writeFileSync(filename, str, { encoding: "utf8" });
-        } catch {
-            has_error = true;
-        }
-    } else
-    if (typeof std !== "undefined") {
-        // save the file in QuickJS
-        var f = std.open(filename, "w");
-        if (f) {
-            f.puts(str);
-            f.close();
-        } else {
-            has_error = 'true';
-        }
-    } else {
+    var f;
+    if (typeof std === "undefined")
         return;
-    }
-    if (has_error)
-        console.log("cannot save " + filename);
+    f = std.open(filename, "w");
+    f.puts(JSON.stringify(obj, null, 2));
+    f.puts("\n");
+    f.close();
 }
 
 function main(argc, argv, g)
 {
     var test_list = [
         empty_loop,
-        empty_down_loop,
-        empty_down_loop2,
-        empty_do_loop,
         date_now,
-        date_parse,
         prop_read,
         prop_write,
-        prop_update,
         prop_create,
-        prop_clone,
         prop_delete,
         array_read,
         array_write,
         array_prop_create,
-        array_slice,
         array_length_decr,
         array_hole_length_decr,
         array_push,
@@ -1214,9 +974,8 @@ function main(argc, argv, g)
         local_destruct,
         global_destruct,
         global_destruct_strict,
-        global_func_call,
         func_call,
-        func_closure_call,
+        closure_var,
         int_arith,
         float_arith,
         set_collection_add,
@@ -1224,34 +983,29 @@ function main(argc, argv, g)
         array_for_in,
         array_for_of,
         math_min,
-        regexp_ascii,
-        regexp_utf16,
         string_build1,
-        string_build1x,
-        string_build2c,
         string_build2,
-        string_build3,
-        string_build4,
+        //string_build3,
+        //string_build4,
+        sort_bench,
         int_to_string,
         float_to_string,
         string_to_int,
         string_to_float,
     ];
     var tests = [];
-    var i, j, n, f, name, found;
-    var ref_file, new_ref_file = "microbench-new.txt";
-
-    if (typeof BigInt === "function") {
+    var i, j, n, f, name;
+    
+    if (typeof BigInt == "function") {
         /* BigInt test */
         test_list.push(bigint64_arith);
         test_list.push(bigint256_arith);
     }
-    if (typeof BigFloat === "function") {
+    if (typeof BigFloat == "function") {
         /* BigFloat test */
         test_list.push(float256_arith);
     }
-    test_list.push(sort_bench);
-
+    
     for (i = 1; i < argc;) {
         name = argv[i++];
         if (name == "-a") {
@@ -1261,7 +1015,7 @@ function main(argc, argv, g)
         if (name == "-t") {
             name = argv[i++];
             sort_bench.array_type = g[name];
-            if (typeof sort_bench.array_type !== "function") {
+            if (typeof sort_bench.array_type != "function") {
                 console.log("unknown array type: " + name);
                 return 1;
             }
@@ -1271,22 +1025,14 @@ function main(argc, argv, g)
             sort_bench.array_size = +argv[i++];
             continue;
         }
-        if (name == "-r") {
-            ref_file = argv[i++];
-            continue;
-        }
-        if (name == "-s") {
-            new_ref_file = argv[i++];
-            continue;
-        }
-        for (j = 0, found = false; j < test_list.length; j++) {
+        for (j = 0; j < test_list.length; j++) {
             f = test_list[j];
-            if (f.name.startsWith(name)) {
+            if (name === f.name) {
                 tests.push(f);
-                found = true;
+                break;
             }
         }
-        if (!found) {
+        if (j == test_list.length) {
             console.log("unknown benchmark: " + name);
             return 1;
         }
@@ -1294,7 +1040,7 @@ function main(argc, argv, g)
     if (tests.length == 0)
         tests = test_list;
 
-    ref_data = load_result(ref_file);
+    ref_data = load_result("microbench.txt");
     log_data = {};
     log_line.apply(null, heads);
     n = 0;
@@ -1306,17 +1052,14 @@ function main(argc, argv, g)
             n++;
     }
     if (ref_data)
-        log_line("total", "", total[2], total[3], Math.round(total_scale * 1000 / total_score));
+        log_line("total", "", total[2], total[3], total_score * 100 / total_scale);
     else
         log_line("total", "", total[2]);
-
-    if (tests == test_list && new_ref_file)
-        save_result(new_ref_file, log_data);
+        
+    if (tests == test_list)
+        save_result("microbench-new.txt", log_data);
 }
 
-if (typeof scriptArgs === "undefined") {
+if (!scriptArgs)
     scriptArgs = [];
-    if (typeof process.argv === "object")
-        scriptArgs = process.argv.slice(1);
-}
 main(scriptArgs.length, scriptArgs, this);

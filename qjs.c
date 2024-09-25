@@ -1,6 +1,6 @@
 /*
  * QuickJS stand alone interpreter
- *
+ * 
  * Copyright (c) 2017-2021 Fabrice Bellard
  * Copyright (c) 2017-2021 Charlie Gordon
  *
@@ -34,10 +34,8 @@
 #include <time.h>
 #if defined(__APPLE__)
 #include <malloc/malloc.h>
-#elif defined(__linux__) || defined(__GLIBC__)
+#elif defined(__linux__)
 #include <malloc.h>
-#elif defined(__FreeBSD__)
-#include <malloc_np.h>
 #endif
 
 #include "cutils.h"
@@ -66,7 +64,6 @@ static int eval_buf(JSContext *ctx, const void *buf, int buf_len,
             js_module_set_import_meta(ctx, val, TRUE, TRUE);
             val = JS_EvalFunction(ctx, val);
         }
-        val = js_std_await(ctx, val);
     } else {
         val = JS_Eval(ctx, buf, buf_len, filename, eval_flags);
     }
@@ -85,7 +82,7 @@ static int eval_file(JSContext *ctx, const char *filename, int module)
     uint8_t *buf;
     int ret, eval_flags;
     size_t buf_len;
-
+    
     buf = js_load_file(ctx, &buf_len, filename);
     if (!buf) {
         perror(filename);
@@ -143,19 +140,19 @@ static inline unsigned long long js_trace_malloc_ptr_offset(uint8_t *ptr,
 }
 
 /* default memory allocation functions with memory limitation */
-static size_t js_trace_malloc_usable_size(const void *ptr)
+static inline size_t js_trace_malloc_usable_size(void *ptr)
 {
 #if defined(__APPLE__)
     return malloc_size(ptr);
 #elif defined(_WIN32)
-    return _msize((void *)ptr);
+    return _msize(ptr);
 #elif defined(EMSCRIPTEN)
     return 0;
-#elif defined(__linux__) || defined(__GLIBC__)
-    return malloc_usable_size((void *)ptr);
+#elif defined(__linux__)
+    return malloc_usable_size(ptr);
 #else
     /* change this to `return 0;` if compilation fails */
-    return malloc_usable_size((void *)ptr);
+    return malloc_usable_size(ptr);
 #endif
 }
 
@@ -267,7 +264,18 @@ static const JSMallocFunctions trace_mf = {
     js_trace_malloc,
     js_trace_free,
     js_trace_realloc,
-    js_trace_malloc_usable_size,
+#if defined(__APPLE__)
+    malloc_size,
+#elif defined(_WIN32)
+    (size_t (*)(const void *))_msize,
+#elif defined(EMSCRIPTEN)
+    NULL,
+#elif defined(__linux__)
+    (size_t (*)(const void *))malloc_usable_size,
+#else
+    /* change this to `NULL,` if compilation fails */
+    malloc_usable_size,
+#endif
 };
 
 #define PROG_NAME "qjs"
@@ -317,7 +325,7 @@ int main(int argc, char **argv)
     int load_jscalc;
 #endif
     size_t stack_size = 0;
-
+    
 #ifdef CONFIG_BIGNUM
     /* load jscalc runtime if invoked as 'qjscalc' */
     {
@@ -329,7 +337,7 @@ int main(int argc, char **argv)
         load_jscalc = !strcmp(exename, "qjscalc");
     }
 #endif
-
+    
     /* cannot use getopt because we want to pass the command line to
        the script */
     optind = 1;
@@ -446,10 +454,8 @@ int main(int argc, char **argv)
         }
     }
 
-#ifdef CONFIG_BIGNUM
     if (load_jscalc)
         bignum_ext = 1;
-#endif
 
     if (trace_memory) {
         js_trace_malloc_init(&trace_data);
@@ -480,7 +486,7 @@ int main(int argc, char **argv)
         JS_SetHostPromiseRejectionTracker(rt, js_std_promise_rejection_tracker,
                                           NULL);
     }
-
+    
     if (!empty_run) {
 #ifdef CONFIG_BIGNUM
         if (load_jscalc) {
@@ -521,7 +527,7 @@ int main(int argc, char **argv)
         }
         js_std_loop(ctx);
     }
-
+    
     if (dump_memory) {
         JSMemoryUsage stats;
         JS_ComputeMemoryUsage(rt, &stats);
