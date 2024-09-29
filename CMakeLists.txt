@@ -20,12 +20,12 @@ file(GLOB quickjs_src
 )
 
 
-#add_executable(${PROJECT_NAME} main.cpp ${quickjs_src} ./cxx/ffi.cpp)
+add_executable(${PROJECT_NAME} main.cpp ${quickjs_src} ./cxx/ffi.cpp)
 #add_executable(${PROJECT_NAME} main.cpp )
-add_library(${PROJECT_NAME} SHARED
-        ${quickjs_src}
-        ./cxx/ffi.cpp
-)
+#add_library(${PROJECT_NAME} SHARED
+#        ${quickjs_src}
+#        ./cxx/ffi.cpp
+#)
 
 
 
